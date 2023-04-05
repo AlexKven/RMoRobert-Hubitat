@@ -163,6 +163,8 @@ def pageMain() {
                       [500:"500ms"],[750:"750ms"],[1000:"1s"],[1500:"1.5s"],[3000:"3s"]], defaultValue: 100
          input name: "dimStep", type: "number", title: "Dimming buttons change level +/- by (unless \"dim until release\" enabled on supported devices)",
             description: "0-100", required: true, defaultValue: 15
+         input name: "maxLevel", type: "number", title: "Maximum dim level",
+            description: "0-100", required: true, defaultValue: 99
          input name: "maxPressNum", type: "enum", title: "Maximum number of presses (default: 5)",
             options: [[1:1],[2:2],[3:3],[4:4],[5:5],[6:6],[7:7],[8:8],[9:9],[10:10]], defaultValue: 5
       }
@@ -565,7 +567,8 @@ def makeDimSection(btnNum, String strAction = sPUSHED, String direction) {
    String rampSettingName = "btn${btnNum}.${strAction}.UseStartLevelChange"
    section() {
       if (!settings[rampSettingName]) {
-      paragraph "Adjust level by ${direction == 'up' ? '+' : '-'}${settings["dimStep"] ?: 15}% for any " +
+         Integer maxLevel = settings["maxLevel"] as Integer ?: 99
+         paragraph "Adjust level by ${direction == 'up' ? '+' : '-'}${settings["dimStep"] ?: 15}%${(direction == 'up' && maxLevel != 99) ? ' up to ' + maxLevel + '%' : ""} for any " +
                 "lights that are on when button ${btnNum} is $strAction"
       } else {
          paragraph "Dim $direction on ${eventMap[strAction]?.userAction}"
@@ -629,6 +632,7 @@ void buttonHandler(evt) {
    Integer btnNum = new Integer(evt.value)
    String action = evt.name
    String actionSettingName =  "btn${btnNum}.${action}.Action"
+   Integer maxLevel = settings["maxLevel"] as Integer ?: 99
    //log.error "==== $actionSettingName = ${settings[actionSettingName]} ===="
    switch (settings[actionSettingName] as String) {
       case sON:
@@ -812,7 +816,7 @@ void buttonHandler(evt) {
             //log.trace "Ramp-down dimming option NOT enabled for button ${btnNum}"
             Integer changeBy = settings["dimStep"] ? 0 - settings["dimStep"] as Integer : -15
             List<DeviceWrapper> devices = (settings['boolGroup'] && settings['group']) ? group : dimmers
-            doActionDim(devices, changeBy)
+            doActionDim(devices, changeBy, maxLevel)
          }
          break
       case sBRI:
@@ -825,7 +829,7 @@ void buttonHandler(evt) {
             //log.trace "Ramp-up dimming option NOT enabled for button ${btnNum}" 
             Integer changeBy = settings["dimStep"] ? settings["dimStep"] as Integer : 15
             List<DeviceWrapper> devices = (settings['boolGroup'] && settings['group']) ? group : dimmers            
-            doActionDim(devices, changeBy)
+            doActionDim(devices, changeBy, maxLevel)
          }
          break
       case sSTOP_LEVEL_CHANGE:
@@ -840,6 +844,8 @@ void buttonHandler(evt) {
          if (doStop) {
             logTrace("Stopping level change on $dimmers")
             dimmers.stopLevelChange()
+            pauseExecution(500)
+            capMaxLevel(dimmers, maxLevel)
          }
          break
       default:
@@ -902,8 +908,30 @@ void doSetLevel(devices, Integer level) {
    }
 }
 
-void doActionDim(devices, Integer changeBy) {
-   logDebug("doActionDim($devices, $changeBy)")
+void capMaxLevel(devices, Integer maxLevel) {
+   logDebug("capMaxLevel($devices, $maxLevel)")
+   List<DeviceWrapper> devs = devices?.findAll { it.currentValue("switch") != "off" }
+   logTrace("  on devices = $devs")
+   devs.each { DeviceWrapper it ->
+      Integer currLvl = it.currentValue('level') as Integer
+      Integer newLvl = currLvl;
+      if (newLvl > maxLevel) {
+         newLvl = maxLevel
+         it.setLevel(newLvl)
+         if (settings['boolDblCmd']) {
+            pauseExecution(settings.meterDelay ?: 200)
+            it.setLevel(newLvl)
+         }
+      }
+   }
+   if (settings.meterDelay /*&& currDevNum < devs.size()*/) {
+      //currDevNum++
+      pauseExecution(settings.meterDelay)
+   }
+}
+
+void doActionDim(devices, Integer changeBy, Integer maxLevel) {
+   logDebug("doActionDim($devices, $changeBy, $maxLevel)")
    List<DeviceWrapper> devs = devices?.findAll { it.currentValue("switch") != "off" }
    logTrace("  on devices = $devs")
    BigDecimal transitionTime = (settings['transitionTime'] != null  && settings['transitionTime'] != 'null') ?
@@ -913,8 +941,8 @@ void doActionDim(devices, Integer changeBy) {
    devs.each { DeviceWrapper it ->
       Integer currLvl = it.currentValue('level') as Integer
       Integer newLvl = currLvl + changeBy
-      if (newLvl > 100) {
-         newLvl = 100
+      if (newLvl > maxLevel) {
+         newLvl = maxLevel
       }
       else if (newLvl < 1) {
          newLvl = 1
